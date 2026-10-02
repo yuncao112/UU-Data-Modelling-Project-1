@@ -1,0 +1,465 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Sep 24 13:28:44 2026
+
+@author: Oski
+"""
+
+from pathlib import Path
+import numpy as np
+import pandas as pd
+from scipy import stats
+import matplotlib.pyplot as plt
+import statsmodels.formula.api as smf
+
+
+PROJECT_DIR   = Path("/Users/Oski/Desktop/DaMod_computer_labs/week-02-data-wrangling")
+PROCESSED_DIR = PROJECT_DIR / "data" / "processed"
+FIGURE_DIR    = PROJECT_DIR / "figures"
+
+final_table_path = PROCESSED_DIR / "camels_gb_1991_2020_analysis_ready.csv"
+
+# Loading the processed table from pracitcal 2 
+final_table = pd.read_csv(final_table_path)
+
+# Checking the table 
+final_table.head()
+
+#-----------------------Question 1 reviewing bivariate regrssion-------------
+
+x = np.log10(final_table["conductivity_hypres"])
+y = final_table["runoff_ratio"]
+
+slope, intercept = np.polyfit(x,y,1)
+y_predicted = intercept + slope * x
+
+fig, ax = plt.subplots(figsize=(5, 4))
+ax.scatter(x,y, s =25, alpha = 0.4, label = "catchments")
+ax.plot(x,y_predicted,color = "black", lw = 2, label = "linear regression")
+
+ax.set_xlabel("Conductivity (cm h−1)")
+ax.set_ylabel("Runoff ratio")
+plt.show()
+
+r, p = stats.pearsonr(x, y, method=None)
+r2 = 1 - (np.sum((y-y_predicted)**2)/np.sum((y-y.mean())**2))
+
+print(f"Correlation coefficient : {r:.3f}")
+print(f"p-value                 : {p:.2e}")
+print(f"R²                      : {r2:.3f}")
+
+
+model_arid = smf.ols(
+    "runoff_ratio ~ aridity",
+    data=final_table).fit()
+print(model_arid.summary())
+
+intercept = model_arid.params["Intercept"]
+slope = model_arid.params["aridity"]
+
+arid=final_table["aridity"]
+y_predicted = intercept + slope * arid
+
+
+
+fig, ax = plt.subplots(figsize = (5,4))
+ax.scatter(arid,y, s =25, alpha = 0.4, label = "catchments")
+ax.plot(arid, y_predicted,color = "black", lw = 2, label = "linear regression")
+
+ax.set_xlabel("Conductivity (cm h−1)")
+ax.set_ylabel("Runoff ratio")
+plt.show()
+
+#-----------------------------------------Question 2--------------------
+final_table["log_conductivity"] = x
+
+model_arid_logcon = smf.ols(
+    formula = "runoff_ratio ~ aridity + log_conductivity",
+    data=final_table
+    ).fit()
+
+print(model_arid_logcon.summary())
+
+fig, ax  = plt.subplots(figsize = (5,4))
+ax.scatter(arid,x, alpha = 0.4)
+ax.set_xlabel("Aridity index (PET / P")
+ax.set_ylabel("Log Conductivity (cm h−1)")
+ax.set_title("Relationship between Aridity and Log Conductivity")
+plt.show()
+
+stats.pearsonr(arid, x)
+
+#visualizing the regression results 
+
+y_obs = model_arid_logcon.model.endog
+y_pred = model_arid_logcon.predict()
+
+plt.figure(figsize = (5,4))
+plt.scatter(y_obs, y_predicted, alpha = 0.6)
+
+plt.plot([y_obs.min(), y_obs.max()],[y_obs.min(), y_obs.max()],'k--',label='one-on-one line')
+
+plt.xlabel("Observed runoff ratio")
+plt.ylabel("Predicted runoff ratio")
+plt.show()
+
+#Residual analysis 
+
+fitted = model_arid_logcon.fittedvalues
+residuals = model_arid_logcon.resid
+
+plt.figure(figsize = (5,4))
+plt.scatter(fitted, residuals, s =25, alpha = 0.4)
+plt.xlabel("Fitted values")
+plt.ylabel("Residuals")
+plt.show()
+
+plt.figure(figsize = (5,4))
+plt.hist(residuals, bins = 30, edgecolor = "white" )
+plt.xlabel("residuals")
+plt.show()
+
+#Mapping residuals 
+limit = max(abs(residuals.min()), abs(residuals.max()))
+
+plt.figure(figsize = [5,7])
+plt.scatter(
+    final_table["gauge_lon"],
+    final_table["gauge_lat"],
+    c=residuals,
+    cmap="coolwarm",
+    vmin=-limit,
+    vmax=limit,
+)
+
+plt.colorbar(label="Residual")
+
+plt.xlabel("Longitude")
+plt.ylabel("Latitude")
+plt.show()
+
+# preforming my own multiple regression 
+
+model_bulk_PET_ = smf.ols(
+    formula = "runoff_ratio ~ root_depth+ pet_mean + urban_perc_2015 ",
+    data=final_table
+    ).fit()
+
+print(model_bulk_PET_.summary())
+
+
+
+#-----------------------------Question 3-------------------------------#
+
+climate_vars = [ 
+    "t_mean", 
+    "pet_mean", 
+    "p_mean", 
+    "elev_mean"]
+
+climate_data= final_table[climate_vars].dropna()
+
+climate_data.head()
+
+corr = final_table[climate_vars].corr()
+print("Correlation matrix: \n", corr.round(2))
+
+plt.imshow(corr, cmap= "coolwarm", vmin =-1, vmax= 1)
+plt.colorbar(label = "Correlation")
+plt.xticks(range(len(climate_vars)), climate_vars, rotation = 45, ha = "right")
+plt.yticks(range(len(climate_vars)), climate_vars)
+plt.title("correlation matrix of climate variables")
+plt.show()
+
+
+from sklearn.preprocessing import StandardScaler
+
+scaler = StandardScaler()
+climate_scaled = scaler.fit_transform(climate_data)
+
+from sklearn.decomposition import PCA
+
+pca = PCA() #Creates a PCA object with the default settings.
+
+climate_pca = pca.fit_transform(climate_scaled)
+
+
+explained_variance = pca.explained_variance_ratio_
+
+plt.figure(figsize=(6,4))
+
+plt.plot(
+    range(1, len(explained_variance)+1),
+    explained_variance,
+    marker="o"
+)
+plt.xticks(range(1, len(explained_variance)+1))
+plt.xlabel("Principal component")
+plt.ylabel("Fraction of explained variance")
+
+plt.show()
+
+print(explained_variance)
+
+plt.figure(figsize=(7,5))
+
+plt.scatter(
+    climate_pca[:,0],
+    climate_pca[:,1]
+)
+
+plt.xlabel("PC1")
+plt.ylabel("PC2")
+plt.grid()
+plt.show()
+
+#Adding the vairables to the plot 
+loadings = pd.DataFrame(
+    pca.components_.T,
+    columns=[
+        "PC1",
+        "PC2",
+        "PC3",
+        "PC4",
+    ],
+    index=climate_vars
+)
+loadings
+
+plt.scatter(
+    climate_pca[:,0],
+    climate_pca[:,1],
+    alpha=0.6
+)
+
+for i, var in enumerate(climate_vars):
+    plt.arrow(
+        0, 0,
+        loadings.iloc[i,0],
+        loadings.iloc[i,1],
+        color="black",
+        head_width=0.05,
+        length_includes_head=False
+    )
+
+    plt.text(
+        loadings.iloc[i,0]*1.1,
+        loadings.iloc[i,1]*1.1,
+        var,
+        color="black"
+    )
+
+plt.xlabel(f"PC1 ({explained_variance[0]*100:.1f}%)")
+plt.ylabel(f"PC2 ({explained_variance[1]*100:.1f}%)")
+
+plt.axhline(0, color="grey", linewidth=0.5)
+plt.axvline(0, color="grey", linewidth=0.5)
+
+plt.show()
+
+#Adding latitude and longitude to the scatter plot 
+
+
+#-Latitude 
+plt.figure(figsize=(7,5))
+
+points= plt.scatter(
+    climate_pca[:,0],
+    climate_pca[:,1],
+    c =final_table["gauge_lat"] , cmap="managua")
+plt.colorbar(points, label ="Latitude")
+plt.xlabel("PC1")
+plt.ylabel("PC2")
+plt.title("PCA for climate variables for catchments' latitudes")
+plt.grid()
+plt.show()
+
+#-Longitude
+plt.figure(figsize=(7,5))
+
+points= plt.scatter(
+    climate_pca[:,0],
+    climate_pca[:,1],
+    c =final_table["gauge_lon"] , cmap="managua")
+plt.colorbar(points, label ="Longitude")
+plt.xlabel("PC1")
+plt.ylabel("PC2")
+plt.title("PCA for climate variables for catchments' longitudes")
+plt.grid()
+plt.show()
+
+#PCA for climate, soil, topogrpahical and cover variables 
+
+#-setting up variables 
+PCA_vars = ["t_mean", 
+"pet_mean", 
+"p_mean", 
+"soil_depth_pelletier", 
+"conductivity_hypres", 
+"root_depth", 
+"porosity_hypres",
+"urban_perc_2015", 
+"dwood_perc_2015",
+"ewood_perc_2015", 
+"grass_perc_2015", 
+"crop_perc_2015",
+"elev_mean", 
+"dpsbar"]
+
+PCA_data = final_table[PCA_vars].dropna()
+
+#-preforming PCA
+PCA_scaler = StandardScaler()
+PCA_scaled = scaler.fit_transform(PCA_data)
+
+
+pca = PCA() 
+
+final_pca = pca.fit_transform(PCA_scaled)
+
+
+explained_variance = pca.explained_variance_ratio_
+
+
+#plotting explain variance 
+plt.figure(figsize=(6,4))
+
+plt.plot(
+    range(1, len(explained_variance)+1),
+    explained_variance,
+    marker="o"
+)
+plt.xticks(range(1, len(explained_variance)+1))
+plt.xlabel("Principal component")
+plt.ylabel("Fraction of explained variance")
+
+plt.show()
+
+print(explained_variance)
+#- plotting cumulative explained variance 
+
+cumulative_variance = pca.explained_variance_ratio_.cumsum()
+
+
+plt.figure(figsize = (6,4))
+
+plt.plot(
+    range(1, len(cumulative_variance)+1),
+    cumulative_variance,
+    marker="o"
+)
+plt.xticks(range(1, len(explained_variance)+1))
+plt.xlabel("Principal component")
+plt.ylabel("Cumulative explained variance")
+plt.show()
+
+
+#-plotting scatter plot 
+plt.figure(figsize=(7,5))
+
+plt.scatter(
+    final_pca[:,0],
+    final_pca[:,1]
+)
+
+plt.xlabel("PC1")
+plt.ylabel("PC2")
+plt.grid()
+plt.show()
+
+
+
+#Adding the vairables to the plot 
+all_loadings = pd.DataFrame(
+    pca.components_.T,
+    columns=[
+        "PC1",
+        "PC2",
+        "PC3",
+        "PC4",
+        "PC5",
+        "PC6",
+        "PC7",
+        "PC8",
+        "PC9",
+        "PC10",
+        "PC11",
+        "PC12",
+        "PC13",
+        "PC14"   
+    ],
+    index=PCA_vars
+)
+
+all_loadings[["PC1","PC2"]]
+
+arrow_scale= 4
+
+plt.figure(figsize=(10,8))
+plt.scatter(
+    final_pca[:,0],
+    final_pca[:,1],
+    alpha=0.6
+)
+
+
+
+for i, var in enumerate(PCA_vars):
+    
+    x = all_loadings.loc[var, "PC1"] * arrow_scale
+    y = all_loadings.loc[var, "PC2"] * arrow_scale
+
+    plt.arrow(
+        0, 0, x, y,
+        color="black",
+        head_width=0.05,
+        length_includes_head=False
+    )
+
+    plt.text(
+        x*1.3,
+        y*1.3,
+        var,
+        color="black"
+    )
+
+plt.xlabel(f"PC1 ({explained_variance[0]*100:.1f}%)")
+plt.ylabel(f"PC2 ({explained_variance[1]*100:.1f}%)")
+
+plt.axhline(0, color="grey", linewidth=0.5)
+plt.axvline(0, color="grey", linewidth=0.5)
+
+plt.show()
+
+#conducting correlation between PCs and runoff ratio
+catchment_data = final_table[PCA_vars].dropna()
+catch_scaled = scaler.fit_transform(catchment_data)
+
+pca_all = PCA()
+catchment_pca = pca_all.fit_transform(catch_scaled)
+
+runoff_pca = final_table.loc[catchment_data.index, "runoff_ratio"]
+
+print(np.corrcoef(catchment_pca[:,0], runoff_pca)[0,1])
+print(np.corrcoef(catchment_pca[:,1], runoff_pca)[0,1])
+
+
+
+PCA_corr = final_table[PCA_vars].corr()
+print("Correlation matrix: \n", corr.round(2))
+
+plt.imshow(PCA_corr, cmap= "coolwarm", vmin =-1, vmax= 1)
+plt.colorbar(label = "Correlation")
+plt.xticks(range(len(PCA_vars)), PCA_vars, rotation = 45, ha = "right")
+plt.yticks(range(len(PCA_vars)), PCA_vars)
+plt.title("correlation matrix of climate variables")
+plt.show()
+
+
+model_pet = smf.ols(
+    formula = "runoff_ratio ~ pet_mean ",
+    data=final_table
+    ).fit()
+
+print(model_pet.summary())

@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Sep 15 12:18:04 2026
+
+@author: victor
+"""
+
+# import packages
+from pathlib import Path
+import numpy as np
+import pandas as pd
+import geopandas as gpd
+import matplotlib.pyplot as plt
+from matplotlib.colors import TwoSlopeNorm
+
+# set the project folder to the folder where you unpacked the zip archive
+PROJECT_DIR   = Path("/Path/to/DaMod-computer-labs/week-02-data-wrangling")
+
+# define paths to subfolders
+RAW_DIR       = PROJECT_DIR / "data" / "raw"
+DAILY_DIR     = RAW_DIR / "daily"
+ATTRIBUTE_DIR = RAW_DIR / "attributes"
+SPATIAL_DIR   = RAW_DIR / "spatial"

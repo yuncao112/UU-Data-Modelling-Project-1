@@ -1,0 +1,486 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Sep 17 13:25:03 2026
+
+@author: 12619
+"""
+from pathlib import Path
+import geopandas as gpd
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+
+# directory settings
+PROJECT_DIR = Path("D:/DaMod-computer-labs/week-02-data-wrangling")
+RAW_DIR = PROJECT_DIR / "data" / "raw"
+DAILY_DIR = RAW_DIR / "daily"
+ATTRIBUTE_DIR = RAW_DIR / "attributes"
+SPATIAL_DIR = RAW_DIR / "spatial"
+PROCESSED_DIR = PROJECT_DIR / "data" / "processed"
+FIGURE_DIR = PROJECT_DIR / "figures"
+
+
+# settings
+PRECIP_COL = "precipitation_haduk"
+PET_COL = "pet_hydrope"
+TEMP_COL = "temperature_haduk"
+QSPEC_COL = "discharge_spec"
+
+
+# settings continued...
+ANALYSIS_START = pd.Timestamp("1991-01-01")
+ANALYSIS_END = pd.Timestamp("2020-12-31")
+
+
+# settings continued...
+MIN_VALID_PERCENT_PER_YEAR = 95
+MIN_SUFFICIENT_YEARS = 28
+
+
+# example file
+example_file = DAILY_DIR / "camels_gb_v2_hydromet_daily_timeseries_39001_19701001-20220930.csv"
+
+
+# read the csv file
+one_daily = pd.read_csv(
+    example_file,
+    parse_dates=["date"],
+    usecols=["date", PRECIP_COL, PET_COL, TEMP_COL, QSPEC_COL],
+)
+
+
+# filter for the analysis period
+in_period = (
+    (one_daily["date"] >= ANALYSIS_START)
+    & (one_daily["date"] <= ANALYSIS_END)
+)
+
+one_daily = one_daily.loc[in_period]
+
+
+# add a year column
+one_daily["year"] = one_daily["date"].dt.year
+
+
+# calculate per row whether there is a missing value in any column
+one_daily["missing"] = one_daily.isna().any(axis=1)
+
+
+# aggregate by year to calculate the percentage of valid daily values per year
+annual_completeness = one_daily.groupby("year").mean()
+
+annual_completeness["missing"] = annual_completeness["missing"] * 100
+
+
+# determine which years are sufficiently complete
+annual_completeness["valid_year"] = (
+    annual_completeness["missing"]
+    <= (100 - MIN_VALID_PERCENT_PER_YEAR)
+)
+
+
+# count the number of sufficiently complete years
+no_of_valid_years = annual_completeness["valid_year"].sum()
+
+
+# look at the result
+print(annual_completeness)
+
+print()
+print("Number of sufficiently complete years:", no_of_valid_years)
+
+hydrometry_columns = ["gauge_id", "station_quality_qmed"]
+
+hydrometry = pd.read_csv(
+    ATTRIBUTE_DIR / "camels_gb_v2_hydrometry_attributes.csv",
+    usecols=hydrometry_columns,
+    dtype={"gauge_id": str}
+)
+
+print(hydrometry["station_quality_qmed"].value_counts())
+
+def summarise_daily_completeness(file_path):
+
+    # Extract the gauge_id from the file name. The file name is of the form
+    # camels_gb_v2_hydromet_daily_timeseries_<gauge_id>_19701001-20220930.csv,
+    # so we can split on "timeseries_" and "_19701001" to get the gauge_id.
+    gauge_id = file_path.name.split("timeseries_")[1].split("_19701001")[0]
+
+    # ADD CODE TO READ THE CSV HERE:
+    one_daily = pd.read_csv(
+        example_file,
+        parse_dates=["date"],
+        usecols=["date", PRECIP_COL, PET_COL, TEMP_COL, QSPEC_COL],
+    )
+
+    # ADD CODE TO CALCULATE no_of_valid_years HERE:
+    in_period = (
+        (one_daily["date"] >= ANALYSIS_START)
+        & (one_daily["date"] <= ANALYSIS_END)
+    )
+
+    one_daily = one_daily.loc[in_period]
+
+    # add a year column
+    one_daily["year"] = one_daily["date"].dt.year
+
+    # calculate per row whether there is a missing value in any column
+    one_daily["missing"] = one_daily.isna().any(axis=1)
+
+    # aggregate by year to calculate the percentage of valid daily values per year
+    annual_completeness = one_daily.groupby("year").mean()
+    annual_completeness["missing"] = annual_completeness["missing"] * 100
+
+    # determine which years are sufficiently complete
+    annual_completeness["valid_year"] = (
+        annual_completeness["missing"]
+        <= (100 - MIN_VALID_PERCENT_PER_YEAR)
+    )
+
+    # count the number of sufficiently complete years
+    no_of_valid_years = annual_completeness["valid_year"].sum()
+
+    # Create dictionary that will be the output of the function
+    row = {
+        "gauge_id": gauge_id,
+        "no_of_valid_years": no_of_valid_years,
+    }
+
+    return row
+print(summarise_daily_completeness(example_file))
+
+# get a list of all csv files in the daily folder
+daily_files = DAILY_DIR.glob("*.csv")
+
+# loop over the daily files and collect the completeness information
+# in a list of dictionaries
+completeness_rows = []
+
+for file_path in daily_files:
+    completeness_rows.append(
+        summarise_daily_completeness(file_path)
+    )
+
+# convert the list of dictionaries to a DataFrame
+daily_completeness = pd.DataFrame(completeness_rows)
+
+# merge with hydrometry attributes table
+station_quality = daily_completeness.merge(
+    hydrometry,
+    on="gauge_id",
+    how="left",
+    validate="one_to_one"
+)
+
+print(station_quality.head())
+
+station_quality["retained_for_analysis"] = station_quality["station_quality_qmed"] & station_quality["no_of_valid_years"].ge(MIN_SUFFICIENT_YEARS)
+
+station_quality.to_csv(
+    PROCESSED_DIR / "camels_gb_1991_2020_station_completeness.csv",
+    index=False
+)
+
+print(station_quality.head())
+
+# read the Great Britain outline and the catchment polygons
+gb_outline = gpd.read_file(SPATIAL_DIR / "great_britain_outline.gpkg")
+
+# read the topographic attributes and select the required columns
+topo_attributes = pd.read_csv(
+    ATTRIBUTE_DIR / "camels_gb_v2_topographic_attributes.csv",
+    dtype={"gauge_id": str},
+    usecols=["gauge_id", "gauge_easting", "gauge_northing"]
+)
+
+# merge to station_quality to add the spatial information
+station_quality_spat = station_quality.merge(
+    topo_attributes,
+    on="gauge_id",
+    how="left"
+).copy()
+
+# filter the table for retained and excluded stations
+retained_stations = station_quality_spat.loc[
+    station_quality_spat["retained_for_analysis"]
+]
+
+excluded_stations = station_quality_spat.loc[
+    ~station_quality_spat["retained_for_analysis"]
+]
+
+# make the map
+fig, ax = plt.subplots(figsize=(6, 6))
+
+gb_outline.plot(
+    ax=ax,
+    color="lightgrey",
+    linewidth=1
+)
+
+ax.scatter(
+    retained_stations["gauge_easting"],
+    retained_stations["gauge_northing"],
+    c="darkblue",
+    s=10,
+    label="Retained"
+)
+
+ax.scatter(
+    excluded_stations["gauge_easting"],
+    excluded_stations["gauge_northing"],
+    c="red",
+    s=10,
+    label="Excluded"
+)
+
+ax.set_title("Retained vs excluded stations")
+ax.set_axis_off()
+ax.legend(loc="upper right")
+
+def derive_statistics(file_path):
+
+    # read gauge_id from file name
+    gauge_id = file_path.name.split("timeseries_")[1].split("_19701001")[0]
+
+    # read the daily data file
+    one_daily = pd.read_csv(
+        file_path,
+        parse_dates=["date"],
+        usecols=["date", PRECIP_COL, PET_COL, TEMP_COL, QSPEC_COL]
+    )
+
+    # filter for the analysis period
+    one_daily = one_daily.loc[
+        (one_daily["date"] >= ANALYSIS_START)
+        & (one_daily["date"] <= ANALYSIS_END)
+    ]
+
+    # calculate the mean values for precipitation, pet, and discharge
+    p_mean = one_daily[PRECIP_COL].mean()
+    pet_mean = one_daily[PET_COL].mean()
+    t_mean = one_daily[TEMP_COL].mean()
+    q_mean = one_daily[QSPEC_COL].mean()
+
+    # calculate the aridity index
+    aridity = pet_mean / p_mean
+
+    # calculate the fraction of precipitation falling on days colder than 0 °C
+    total_precipitation = one_daily[PRECIP_COL].sum()
+
+    total_snow_fall = one_daily[
+        one_daily[TEMP_COL] < 0
+    ][PRECIP_COL].sum()
+
+    frac_snow = (
+        total_snow_fall / total_precipitation
+        if total_precipitation != 0
+        else 0
+    )
+
+    # calculate the number of days with precipitation of at least
+    # five times the mean daily precipitation
+    high_prec_freq = one_daily[
+        one_daily[PRECIP_COL] >= 5 * p_mean
+    ].shape[0]
+
+    # calculate the 5% and 95% daily-flow quantiles
+    Q5 = one_daily[QSPEC_COL].quantile(0.05)
+
+    Q95 = one_daily[QSPEC_COL].quantile(0.95)
+
+    # calculate the runoff ratio
+    runoff_ratio = q_mean / p_mean
+
+    # return dictionary with the derived statistics
+    return {
+        "gauge_id": gauge_id,
+        "p_mean": p_mean,
+        "pet_mean": pet_mean,
+        "t_mean": t_mean,
+        "q_mean": q_mean,
+        "aridity": aridity,
+        "frac_snow": frac_snow,
+        "high_prec_freq": high_prec_freq,
+        "Q5": Q5,
+        "Q95": Q95,
+        "runoff_ratio": runoff_ratio,
+    }
+
+# get a list of retained gauges and associated file names
+retained_gauges = station_quality[
+    station_quality["retained_for_analysis"] == True
+]["gauge_id"]
+
+retained_files = [
+    DAILY_DIR / f"camels_gb_v2_hydromet_daily_timeseries_{gauge_id}_19701001-20220930.csv"
+    for gauge_id in retained_gauges
+]
+
+# loop over the retained daily files and collect the derived statistics
+# in a list of dictionaries
+derived_rows = []
+
+for file_path in retained_files:
+    derived_rows.append(derive_statistics(file_path))
+
+# convert the list of dictionaries to a DataFrame
+derived_stats = pd.DataFrame(derived_rows)
+
+
+# define column names to read from the CSV files
+soil_columns = [
+    "gauge_id",
+    "sand_perc",
+    "silt_perc",
+    "clay_perc",
+    "organic_perc",
+    "bulkdens",
+    "tawc",
+    "porosity_hypres",
+    "conductivity_hypres",
+    "root_depth",
+    "soil_depth_pelletier",
+]
+landcover_columns = [
+    "gauge_id",
+    "dwood_perc_2015",
+    "ewood_perc_2015",
+    "grass_perc_2015",
+    "crop_perc_2015",
+    "urban_perc_2015",
+]
+
+topography = pd.read_csv(
+    ATTRIBUTE_DIR / "camels_gb_v2_topographic_attributes.csv",
+    dtype={"gauge_id": str}
+    )
+soils = pd.read_csv(
+    ATTRIBUTE_DIR / "camels_gb_v2_soil_attributes.csv",
+    dtype={"gauge_id": str},
+    usecols=soil_columns
+)
+landcover = pd.read_csv(
+    ATTRIBUTE_DIR / "camels_gb_v2_landcover_attributes.csv",
+    dtype={"gauge_id": str},
+    usecols=landcover_columns
+)
+
+# merge the derived statistics with the topography, soils, and landcover tables
+final_table = (
+    derived_stats
+    .merge(topography, on="gauge_id", how="left", validate="one_to_one")
+    .merge(soils, on="gauge_id", how="left", validate="one_to_one")
+    .merge(landcover, on="gauge_id", how="left", validate="one_to_one")
+)
+
+final_table_path = PROCESSED_DIR / "camels_gb_1991_2020_analysis_ready.csv"
+final_table.to_csv(final_table_path, index=False)
+
+fig, ax = plt.subplots(figsize=(6, 3.5))
+
+ax.hist(
+    final_table["runoff_ratio"],
+    bins=30,
+    color="tab:blue",
+    edgecolor="white"
+)
+
+ax.set(
+    xlabel="Runoff ratio",
+    ylabel="Number of catchments",
+    title="Distribution of 1991-2020 runoff ratio"
+)
+
+plt.show()
+
+# setup the figure and axes
+fig_aridity, ax = plt.subplots(figsize=(5, 4))
+
+# plot the scatter plot with semi-transparent points to show overlap
+ax.scatter(
+    final_table["aridity"],
+    final_table["runoff_ratio"],
+    s=25,
+    alpha=0.3,
+    color="tab:blue"
+)
+
+ax.set(
+    xlabel="Aridity (PET / P)",
+    ylabel="Runoff ratio"
+)
+
+plt.show()
+
+fig, ax = plt.subplots(figsize=(5, 4))
+
+ax.scatter(
+    final_table["conductivity_hypres"],
+    final_table["runoff_ratio"],
+    s=25,
+    alpha=0.3,
+    color="tab:blue"
+)
+
+ax.set(
+    xlabel="Hydraulic conductivity",
+    ylabel="Runoff ratio"
+)
+
+ax.set_xscale("log")
+
+plt.show()
+fig, ax = plt.subplots(figsize=(5, 4))
+
+ax.scatter(
+    final_table["urban_perc_2015"],
+    final_table["runoff_ratio"],
+    s=25,
+    alpha=0.3,
+    color="tab:blue"
+)
+
+ax.set(
+    xlabel="Urban land cover (%)",
+    ylabel="Runoff ratio"
+)
+
+plt.show()
+
+# read the catchments outlines and the Great Britain outline
+catchments = gpd.read_file(SPATIAL_DIR / "camels_gb_v2_catchments.gpkg")
+gb_outline = gpd.read_file(SPATIAL_DIR / "great_britain_outline.gpkg")
+
+# merge the catchments with the final table to get a GeoDataFrame with all the attributes that we prepared
+catchment_map = catchments.merge(
+    final_table,
+    left_on="ID_STRING",
+    right_on="gauge_id",
+    how="right",
+    validate="one_to_one"
+)
+
+fig, ax = plt.subplots(figsize=(4, 6))
+
+gb_outline.boundary.plot(
+    ax=ax,
+    color="0.4",
+    linewidth=0.6
+)
+
+catchment_map.plot(
+    column="runoff_ratio",
+    ax=ax,
+    legend=True,
+    cmap="viridis",
+    legend_kwds={
+        "label": "Runoff ratio",
+        "shrink": 0.40,
+        "aspect": 20,
+    }
+)
+
+ax.set_axis_off()
+plt.show()
